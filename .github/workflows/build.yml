@@ -76,8 +76,7 @@ jobs:
             BUILD_LIBRARY_FOR_DISTRIBUTION=YES \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO \
-            | xcpretty || true
+            CODE_SIGNING_ALLOWED=NO
 
       - name: Build iOS Simulator
         run: |
@@ -90,14 +89,44 @@ jobs:
             BUILD_LIBRARY_FOR_DISTRIBUTION=YES \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO \
-            | xcpretty || true
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Find framework paths
+        id: find-frameworks
+        run: |
+          echo "=== iOS Device Archive Contents ==="
+          find build/ios-device.xcarchive -name "*.framework" -type d 2>/dev/null || true
+          find build/ios-device.xcarchive -name "LookinServer*" 2>/dev/null || true
+
+          echo "=== iOS Simulator Archive Contents ==="
+          find build/ios-simulator.xcarchive -name "*.framework" -type d 2>/dev/null || true
+          find build/ios-simulator.xcarchive -name "LookinServer*" 2>/dev/null || true
+
+          # Find actual framework paths
+          DEVICE_FW=$(find build/ios-device.xcarchive -name "LookinServer.framework" -type d | head -1)
+          SIM_FW=$(find build/ios-simulator.xcarchive -name "LookinServer.framework" -type d | head -1)
+
+          echo "Device framework: $DEVICE_FW"
+          echo "Simulator framework: $SIM_FW"
+
+          echo "device_framework=$DEVICE_FW" >> $GITHUB_OUTPUT
+          echo "simulator_framework=$SIM_FW" >> $GITHUB_OUTPUT
 
       - name: Create XCFramework
         run: |
+          DEVICE_FW="${{ steps.find-frameworks.outputs.device_framework }}"
+          SIM_FW="${{ steps.find-frameworks.outputs.simulator_framework }}"
+
+          if [ -z "$DEVICE_FW" ] || [ -z "$SIM_FW" ]; then
+            echo "ERROR: Could not find framework paths"
+            echo "Searching entire build directory..."
+            find build -type d -name "*.framework"
+            exit 1
+          fi
+
           xcodebuild -create-xcframework \
-            -framework "build/ios-device.xcarchive/Products/Library/Frameworks/LookinServer.framework" \
-            -framework "build/ios-simulator.xcarchive/Products/Library/Frameworks/LookinServer.framework" \
+            -framework "$DEVICE_FW" \
+            -framework "$SIM_FW" \
             -output "LookinServer.xcframework"
 
       - name: Verify XCFramework
