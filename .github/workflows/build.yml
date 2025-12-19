@@ -68,66 +68,133 @@ jobs:
       - name: Build iOS Device
         run: |
           cd LookinServer
-          xcodebuild archive \
+          xcodebuild build \
             -scheme LookinServer \
+            -configuration Release \
             -destination "generic/platform=iOS" \
-            -archivePath "../build/ios-device.xcarchive" \
-            SKIP_INSTALL=NO \
+            -derivedDataPath "../build/ios-device" \
             BUILD_LIBRARY_FOR_DISTRIBUTION=YES \
-            CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO
+            SKIP_INSTALL=NO
 
       - name: Build iOS Simulator
         run: |
           cd LookinServer
-          xcodebuild archive \
+          xcodebuild build \
             -scheme LookinServer \
+            -configuration Release \
             -destination "generic/platform=iOS Simulator" \
-            -archivePath "../build/ios-simulator.xcarchive" \
-            SKIP_INSTALL=NO \
+            -derivedDataPath "../build/ios-simulator" \
             BUILD_LIBRARY_FOR_DISTRIBUTION=YES \
-            CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO
-
-      - name: Find framework paths
-        id: find-frameworks
-        run: |
-          echo "=== iOS Device Archive Contents ==="
-          find build/ios-device.xcarchive -name "*.framework" -type d 2>/dev/null || true
-          find build/ios-device.xcarchive -name "LookinServer*" 2>/dev/null || true
-
-          echo "=== iOS Simulator Archive Contents ==="
-          find build/ios-simulator.xcarchive -name "*.framework" -type d 2>/dev/null || true
-          find build/ios-simulator.xcarchive -name "LookinServer*" 2>/dev/null || true
-
-          # Find actual framework paths
-          DEVICE_FW=$(find build/ios-device.xcarchive -name "LookinServer.framework" -type d | head -1)
-          SIM_FW=$(find build/ios-simulator.xcarchive -name "LookinServer.framework" -type d | head -1)
-
-          echo "Device framework: $DEVICE_FW"
-          echo "Simulator framework: $SIM_FW"
-
-          echo "device_framework=$DEVICE_FW" >> $GITHUB_OUTPUT
-          echo "simulator_framework=$SIM_FW" >> $GITHUB_OUTPUT
+            SKIP_INSTALL=NO
 
       - name: Create XCFramework
         run: |
-          DEVICE_FW="${{ steps.find-frameworks.outputs.device_framework }}"
-          SIM_FW="${{ steps.find-frameworks.outputs.simulator_framework }}"
+          # Find the built products
+          DEVICE_LIB=$(find build/ios-device -name "libLookinServer.a" | head -1)
+          SIM_LIB=$(find build/ios-simulator -name "libLookinServer.a" | head -1)
 
-          if [ -z "$DEVICE_FW" ] || [ -z "$SIM_FW" ]; then
-            echo "ERROR: Could not find framework paths"
-            echo "Searching entire build directory..."
-            find build -type d -name "*.framework"
+          echo "Device lib: $DEVICE_LIB"
+          echo "Simulator lib: $SIM_LIB"
+
+          # If static libraries found, we need headers too
+          if [ -n "$DEVICE_LIB" ]; then
+            echo "Found static libraries, creating XCFramework from .a files"
+
+            # Find headers
+            DEVICE_HEADERS=$(dirname "$DEVICE_LIB")
+
+            # Find all related static libraries
+            DEVICE_DIR=$(dirname "$DEVICE_LIB")
+            SIM_DIR=$(dirname "$SIM_LIB")
+
+            echo "Device dir: $DEVICE_DIR"
+            echo "Sim dir: $SIM_DIR"
+            ls -la "$DEVICE_DIR/" || true
+
+            # Try to find swiftmodule
+            find build -name "*.swiftmodule" -type d 2>/dev/null || true
+            find build -name "LookinServer*" 2>/dev/null | head -20
+
+            # For static library, we need to create framework structure manually
+            # or use the framework if SPM created one
+            DEVICE_FW=$(find build/ios-device -name "LookinServer.framework" -type d | head -1)
+            SIM_FW=$(find build/ios-simulator -name "LookinServer.framework" -type d | head -1)
+
+            if [ -n "$DEVICE_FW" ] && [ -n "$SIM_FW" ]; then
+              echo "Found frameworks"
+              xcodebuild -create-xcframework \
+                -framework "$DEVICE_FW" \
+                -framework "$SIM_FW" \
+                -output "LookinServer.xcframework"
+            else
+              echo "No frameworks found, creating from static libraries"
+
+              # Create framework structure manually
+              mkdir -p frameworks/ios-device/LookinServer.framework
+              mkdir -p frameworks/ios-simulator/LookinServer.framework
+
+              cp "$DEVICE_LIB" frameworks/ios-device/LookinServer.framework/LookinServer
+              cp "$SIM_LIB" frameworks/ios-simulator/LookinServer.framework/LookinServer
+
+              # Find and copy headers
+              HEADER_DIR=$(find build/ios-device -path "*/LookinServer.build/DerivedSources" -o -path "*/include/LookinServer" | head -1)
+              if [ -z "$HEADER_DIR" ]; then
+                HEADER_DIR=$(find LookinServer/Src -name "*.h" -exec dirname {} \; | sort -u | head -1)
+              fi
+
+              # Copy public headers from source
+              mkdir -p frameworks/ios-device/LookinServer.framework/Headers
+              mkdir -p frameworks/ios-simulator/LookinServer.framework/Headers
+              find LookinServer/Src -name "*.h" -exec cp {} frameworks/ios-device/LookinServer.framework/Headers/ \;
+              find LookinServer/Src -name "*.h" -exec cp {} frameworks/ios-simulator/LookinServer.framework/Headers/ \;
+
+              # Copy Swift modules if they exist
+              DEVICE_SWIFTMODULE=$(find build/ios-device -name "LookinServer.swiftmodule" -type d | head -1)
+              SIM_SWIFTMODULE=$(find build/ios-simulator -name "LookinServer.swiftmodule" -type d | head -1)
+
+              if [ -n "$DEVICE_SWIFTMODULE" ]; then
+                mkdir -p frameworks/ios-device/LookinServer.framework/Modules
+                cp -R "$DEVICE_SWIFTMODULE" frameworks/ios-device/LookinServer.framework/Modules/
+              fi
+              if [ -n "$SIM_SWIFTMODULE" ]; then
+                mkdir -p frameworks/ios-simulator/LookinServer.framework/Modules
+                cp -R "$SIM_SWIFTMODULE" frameworks/ios-simulator/LookinServer.framework/Modules/
+              fi
+
+              # Create Info.plist
+              for arch in ios-device ios-simulator; do
+                cat > frameworks/$arch/LookinServer.framework/Info.plist << 'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleExecutable</key>
+            <string>LookinServer</string>
+            <key>CFBundleIdentifier</key>
+            <string>com.lookin.LookinServer</string>
+            <key>CFBundleName</key>
+            <string>LookinServer</string>
+            <key>CFBundlePackageType</key>
+            <string>FMWK</string>
+            <key>CFBundleVersion</key>
+            <string>1</string>
+            <key>MinimumOSVersion</key>
+            <string>11.0</string>
+          </dict>
+          </plist>
+          PLIST
+              done
+
+              xcodebuild -create-xcframework \
+                -framework "frameworks/ios-device/LookinServer.framework" \
+                -framework "frameworks/ios-simulator/LookinServer.framework" \
+                -output "LookinServer.xcframework"
+            fi
+          else
+            echo "ERROR: Could not find any build products"
+            find build -type f \( -name "*.a" -o -name "*.framework" \) 2>/dev/null
             exit 1
           fi
-
-          xcodebuild -create-xcframework \
-            -framework "$DEVICE_FW" \
-            -framework "$SIM_FW" \
-            -output "LookinServer.xcframework"
 
       - name: Verify XCFramework
         run: |
