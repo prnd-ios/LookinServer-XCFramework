@@ -73,7 +73,6 @@ jobs:
             -configuration Debug \
             -destination "generic/platform=iOS" \
             -derivedDataPath "../build/ios-device" \
-            BUILD_LIBRARY_FOR_DISTRIBUTION=YES \
             SKIP_INSTALL=NO \
             GCC_PREPROCESSOR_DEFINITIONS='$(inherited) SHOULD_COMPILE_LOOKIN_SERVER=1'
 
@@ -85,7 +84,6 @@ jobs:
             -configuration Debug \
             -destination "generic/platform=iOS Simulator" \
             -derivedDataPath "../build/ios-simulator" \
-            BUILD_LIBRARY_FOR_DISTRIBUTION=YES \
             SKIP_INSTALL=NO \
             GCC_PREPROCESSOR_DEFINITIONS='$(inherited) SHOULD_COMPILE_LOOKIN_SERVER=1'
 
