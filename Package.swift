@@ -11,7 +11,7 @@ let package = Package(
         .binaryTarget(
             name: "LookinServer",
             url: "https://github.com/prnd-ios/LookinServer-XCFramework/releases/download/1.2.8/LookinServer.xcframework.zip",
-            checksum: "4cb90880d024c1a875af186cd35562e3808953ad2a8a11c779b7b08b3a8ad0be"
+            checksum: "58565e9e56ba71a1fc24208465706704ab217e84138dd193eaadae454117924e"
         )
     ]
 )
