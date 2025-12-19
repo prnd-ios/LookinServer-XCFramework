@@ -1,0 +1,8 @@
+.DS_Store
+*.xcframework
+*.xcframework.zip
+build/
+.build/
+.swiftpm/
+DerivedData/
+LookinServer/

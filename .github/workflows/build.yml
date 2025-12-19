@@ -1,0 +1,204 @@
+name: Build XCFramework
+
+on:
+  schedule:
+    - cron: '0 9 * * *'  # Daily at 9:00 UTC (18:00 KST)
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'LookinServer version (e.g., 1.2.8)'
+        required: false
+        type: string
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.check.outputs.should_build }}
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check for new version
+        id: check
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION=$(curl -s https://api.github.com/repos/QMUI/LookinServer/tags | jq -r '.[0].name')
+          fi
+
+          echo "Upstream version: $VERSION"
+
+          if gh release view "$VERSION" > /dev/null 2>&1; then
+            echo "Release $VERSION already exists, skipping build"
+            echo "should_build=false" >> $GITHUB_OUTPUT
+          else
+            echo "New version $VERSION detected, will build"
+            echo "should_build=true" >> $GITHUB_OUTPUT
+          fi
+
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  build:
+    needs: check-version
+    if: needs.check-version.outputs.should_build == 'true'
+    runs-on: macos-14
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '15.4'
+
+      - name: Clone LookinServer
+        run: |
+          git clone --depth 1 --branch ${{ needs.check-version.outputs.version }} \
+            https://github.com/QMUI/LookinServer.git
+          echo "Cloned LookinServer ${{ needs.check-version.outputs.version }}"
+
+      - name: Build iOS Device
+        run: |
+          cd LookinServer
+          xcodebuild archive \
+            -scheme LookinServer \
+            -destination "generic/platform=iOS" \
+            -archivePath "../build/ios-device.xcarchive" \
+            SKIP_INSTALL=NO \
+            BUILD_LIBRARY_FOR_DISTRIBUTION=YES \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            | xcpretty || true
+
+      - name: Build iOS Simulator
+        run: |
+          cd LookinServer
+          xcodebuild archive \
+            -scheme LookinServer \
+            -destination "generic/platform=iOS Simulator" \
+            -archivePath "../build/ios-simulator.xcarchive" \
+            SKIP_INSTALL=NO \
+            BUILD_LIBRARY_FOR_DISTRIBUTION=YES \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            | xcpretty || true
+
+      - name: Create XCFramework
+        run: |
+          xcodebuild -create-xcframework \
+            -framework "build/ios-device.xcarchive/Products/Library/Frameworks/LookinServer.framework" \
+            -framework "build/ios-simulator.xcarchive/Products/Library/Frameworks/LookinServer.framework" \
+            -output "LookinServer.xcframework"
+
+      - name: Verify XCFramework
+        run: |
+          echo "=== XCFramework Contents ==="
+          ls -la LookinServer.xcframework/
+
+          # Verify slices exist
+          if [ ! -d "LookinServer.xcframework/ios-arm64" ]; then
+            echo "ERROR: Missing ios-arm64 slice"
+            exit 1
+          fi
+
+          SIMULATOR_SLICE=$(ls -d LookinServer.xcframework/ios-*-simulator 2>/dev/null | head -1)
+          if [ -z "$SIMULATOR_SLICE" ]; then
+            echo "ERROR: Missing simulator slice"
+            exit 1
+          fi
+
+          echo "XCFramework verification passed"
+
+      - name: Create ZIP
+        run: |
+          zip -r -X LookinServer.xcframework.zip LookinServer.xcframework
+          ls -lh LookinServer.xcframework.zip
+
+      - name: Calculate Checksum
+        id: checksum
+        run: |
+          CHECKSUM=$(swift package compute-checksum LookinServer.xcframework.zip)
+          echo "checksum=$CHECKSUM" >> $GITHUB_OUTPUT
+          echo "Checksum: $CHECKSUM"
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LookinServer-${{ needs.check-version.outputs.version }}
+          path: LookinServer.xcframework.zip
+          retention-days: 7
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.check-version.outputs.version }}
+          name: LookinServer ${{ needs.check-version.outputs.version }}
+          files: LookinServer.xcframework.zip
+          body: |
+            ## LookinServer XCFramework ${{ needs.check-version.outputs.version }}
+
+            ### Swift Package Manager
+
+            Add this package to your project:
+            ```
+            https://github.com/${{ github.repository }}
+            ```
+
+            Or use as a binary target:
+            ```swift
+            .binaryTarget(
+                name: "LookinServer",
+                url: "https://github.com/${{ github.repository }}/releases/download/${{ needs.check-version.outputs.version }}/LookinServer.xcframework.zip",
+                checksum: "${{ steps.checksum.outputs.checksum }}"
+            )
+            ```
+
+            ### Checksum
+            ```
+            ${{ steps.checksum.outputs.checksum }}
+            ```
+
+            ### Source
+            Built from [QMUI/LookinServer@${{ needs.check-version.outputs.version }}](https://github.com/QMUI/LookinServer/releases/tag/${{ needs.check-version.outputs.version }})
+
+      - name: Update Package.swift
+        run: |
+          VERSION="${{ needs.check-version.outputs.version }}"
+          CHECKSUM="${{ steps.checksum.outputs.checksum }}"
+          REPO="${{ github.repository }}"
+
+          cat > Package.swift << EOF
+          // swift-tools-version: 5.9
+          import PackageDescription
+
+          let package = Package(
+              name: "LookinServer",
+              platforms: [.iOS(.v12)],
+              products: [
+                  .library(name: "LookinServer", targets: ["LookinServer"])
+              ],
+              targets: [
+                  .binaryTarget(
+                      name: "LookinServer",
+                      url: "https://github.com/${REPO}/releases/download/${VERSION}/LookinServer.xcframework.zip",
+                      checksum: "${CHECKSUM}"
+                  )
+              ]
+          )
+          EOF
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Package.swift
+          git diff --cached --quiet || git commit -m "Release ${VERSION}"
+          git push
