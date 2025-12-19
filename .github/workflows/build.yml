@@ -70,22 +70,24 @@ jobs:
           cd LookinServer
           xcodebuild build \
             -scheme LookinServer \
-            -configuration Release \
+            -configuration Debug \
             -destination "generic/platform=iOS" \
             -derivedDataPath "../build/ios-device" \
             BUILD_LIBRARY_FOR_DISTRIBUTION=YES \
-            SKIP_INSTALL=NO
+            SKIP_INSTALL=NO \
+            GCC_PREPROCESSOR_DEFINITIONS='$(inherited) SHOULD_COMPILE_LOOKIN_SERVER=1'
 
       - name: Build iOS Simulator
         run: |
           cd LookinServer
           xcodebuild build \
             -scheme LookinServer \
-            -configuration Release \
+            -configuration Debug \
             -destination "generic/platform=iOS Simulator" \
             -derivedDataPath "../build/ios-simulator" \
             BUILD_LIBRARY_FOR_DISTRIBUTION=YES \
-            SKIP_INSTALL=NO
+            SKIP_INSTALL=NO \
+            GCC_PREPROCESSOR_DEFINITIONS='$(inherited) SHOULD_COMPILE_LOOKIN_SERVER=1'
 
       - name: Debug build output
         run: |
@@ -100,8 +102,8 @@ jobs:
       - name: Create XCFramework
         run: |
           # Find .o files and create static libraries from them
-          DEVICE_PRODUCTS="build/ios-device/Build/Products/Release-iphoneos"
-          SIM_PRODUCTS="build/ios-simulator/Build/Products/Release-iphonesimulator"
+          DEVICE_PRODUCTS="build/ios-device/Build/Products/Debug-iphoneos"
+          SIM_PRODUCTS="build/ios-simulator/Build/Products/Debug-iphonesimulator"
 
           echo "=== Device products ==="
           ls -la "$DEVICE_PRODUCTS/" 2>/dev/null || true
