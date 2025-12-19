@@ -183,6 +183,39 @@ jobs:
           path: LookinServer.xcframework.zip
           retention-days: 7
 
+      - name: Update Package.swift and create tag
+        run: |
+          VERSION="${{ needs.check-version.outputs.version }}"
+          CHECKSUM="${{ steps.checksum.outputs.checksum }}"
+          REPO="${{ github.repository }}"
+
+          cat > Package.swift << EOF
+          // swift-tools-version: 5.9
+          import PackageDescription
+
+          let package = Package(
+              name: "LookinServer",
+              platforms: [.iOS(.v12)],
+              products: [
+                  .library(name: "LookinServer", targets: ["LookinServer"])
+              ],
+              targets: [
+                  .binaryTarget(
+                      name: "LookinServer",
+                      url: "https://github.com/${REPO}/releases/download/${VERSION}/LookinServer.xcframework.zip",
+                      checksum: "${CHECKSUM}"
+                  )
+              ]
+          )
+          EOF
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Package.swift
+          git commit -m "Release ${VERSION}"
+          git tag "${VERSION}"
+          git push origin main --tags
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
@@ -215,35 +248,3 @@ jobs:
 
             ### Source
             Built from [QMUI/LookinServer@${{ needs.check-version.outputs.version }}](https://github.com/QMUI/LookinServer/releases/tag/${{ needs.check-version.outputs.version }})
-
-      - name: Update Package.swift
-        run: |
-          VERSION="${{ needs.check-version.outputs.version }}"
-          CHECKSUM="${{ steps.checksum.outputs.checksum }}"
-          REPO="${{ github.repository }}"
-
-          cat > Package.swift << EOF
-          // swift-tools-version: 5.9
-          import PackageDescription
-
-          let package = Package(
-              name: "LookinServer",
-              platforms: [.iOS(.v12)],
-              products: [
-                  .library(name: "LookinServer", targets: ["LookinServer"])
-              ],
-              targets: [
-                  .binaryTarget(
-                      name: "LookinServer",
-                      url: "https://github.com/${REPO}/releases/download/${VERSION}/LookinServer.xcframework.zip",
-                      checksum: "${CHECKSUM}"
-                  )
-              ]
-          )
-          EOF
-
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Package.swift
-          git diff --cached --quiet || git commit -m "Release ${VERSION}"
-          git push
